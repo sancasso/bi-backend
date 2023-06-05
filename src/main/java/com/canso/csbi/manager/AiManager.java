@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 
+/**
+ * 调用AI模型生成结果
+ */
 @Service
 public class AiManager {
 
