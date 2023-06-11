@@ -6,7 +6,7 @@ import com.canso.csbi.model.entity.User;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.canso.csbi.model.vo.LoginUserVO;
 import com.canso.csbi.model.vo.UserVO;
-import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
+//import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
 
 import javax.servlet.http.HttpServletRequest;
 import java.util.List;
@@ -45,7 +45,7 @@ public interface UserService extends IService<User> {
      * @param request
      * @return 脱敏后的用户信息
      */
-    LoginUserVO userLoginByMpOpen(WxOAuth2UserInfo wxOAuth2UserInfo, HttpServletRequest request);
+//    LoginUserVO userLoginByMpOpen(WxOAuth2UserInfo wxOAuth2UserInfo, HttpServletRequest request);
 
     /**
      * 获取当前登录用户
@@ -118,4 +118,30 @@ public interface UserService extends IService<User> {
      */
     QueryWrapper<User> getQueryWrapper(UserQueryRequest userQueryRequest);
 
+    /**
+     * 用户脱敏
+     *
+     * @param originUser
+     * @return
+     */
+    User getSafetyUser(User originUser);
+
+    /**
+     * 用户签到
+     * @return
+     */
+    Boolean sign(HttpServletRequest request);
+
+    /**
+     * 统计签到数
+     *
+     * @return
+     */
+    int signcount(HttpServletRequest request);
+
+    /**
+     * 获取当前用户签到当日是否已经签到了
+     *
+     */
+    Boolean signstate(HttpServletRequest request);
 }

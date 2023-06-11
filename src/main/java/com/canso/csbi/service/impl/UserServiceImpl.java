@@ -16,14 +16,20 @@ import com.canso.csbi.model.vo.LoginUserVO;
 import com.canso.csbi.model.vo.UserVO;
 import com.canso.csbi.service.UserService;
 import com.canso.csbi.utils.SqlUtils;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
+//import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
+import org.springframework.data.redis.connection.BitFieldSubCommands;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
 
@@ -37,10 +43,13 @@ import org.springframework.util.DigestUtils;
 @Slf4j
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
     /**
      * 盐值，混淆密码
      */
-    private static final String SALT = "yupi";
+    private static final String SALT = "canso";
 
     @Override
     public long userRegister(String userAccount, String userPassword, String checkPassword) {
@@ -109,31 +118,31 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return this.getLoginUserVO(user);
     }
 
-    @Override
-    public LoginUserVO userLoginByMpOpen(WxOAuth2UserInfo wxOAuth2UserInfo, HttpServletRequest request) {
-        String unionId = wxOAuth2UserInfo.getUnionId();
-        String mpOpenId = wxOAuth2UserInfo.getOpenid();
-        // 单机锁
-        synchronized (unionId.intern()) {
-            // 查询用户是否已存在
-            QueryWrapper<User> queryWrapper = new QueryWrapper<>();
-            queryWrapper.eq("unionId", unionId);
-            User user = this.getOne(queryWrapper);
-            // 用户不存在则创建
-            if (user == null) {
-                user = new User();
-                user.setUserAvatar(wxOAuth2UserInfo.getHeadImgUrl());
-                user.setUserName(wxOAuth2UserInfo.getNickname());
-                boolean result = this.save(user);
-                if (!result) {
-                    throw new BusinessException(ErrorCode.SYSTEM_ERROR, "登录失败");
-                }
-            }
-            // 记录用户的登录态
-            request.getSession().setAttribute(USER_LOGIN_STATE, user);
-            return getLoginUserVO(user);
-        }
-    }
+//    @Override
+//    public LoginUserVO userLoginByMpOpen(WxOAuth2UserInfo wxOAuth2UserInfo, HttpServletRequest request) {
+//        String unionId = wxOAuth2UserInfo.getUnionId();
+//        String mpOpenId = wxOAuth2UserInfo.getOpenid();
+//        // 单机锁
+//        synchronized (unionId.intern()) {
+//            // 查询用户是否已存在
+//            QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+//            queryWrapper.eq("unionId", unionId);
+//            User user = this.getOne(queryWrapper);
+//            // 用户不存在则创建
+//            if (user == null) {
+//                user = new User();
+//                user.setUserAvatar(wxOAuth2UserInfo.getHeadImgUrl());
+//                user.setUserName(wxOAuth2UserInfo.getNickname());
+//                boolean result = this.save(user);
+//                if (!result) {
+//                    throw new BusinessException(ErrorCode.SYSTEM_ERROR, "登录失败");
+//                }
+//            }
+//            // 记录用户的登录态
+//            request.getSession().setAttribute(USER_LOGIN_STATE, user);
+//            return getLoginUserVO(user);
+//        }
+//    }
 
     /**
      * 获取当前登录用户
@@ -262,5 +271,104 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
                 sortField);
         return queryWrapper;
+    }
+    /**
+     * 用户脱敏
+     *
+     * @param originUser
+     * @return
+     */
+    @Override
+    public User getSafetyUser(User originUser)  {
+        if (originUser == null) {
+            return null;
+        }
+        User safetyUser = new User();
+        safetyUser.setId(originUser.getId());
+        safetyUser.setUserName(originUser.getUserName());
+        safetyUser.setUserAccount(originUser.getUserAccount());
+        safetyUser.setUserAvatar(originUser.getUserAvatar());
+        safetyUser.setUserRole(originUser.getUserRole());
+        safetyUser.setUpdateTime(originUser.getUpdateTime());
+        safetyUser.setCreateTime(originUser.getCreateTime());
+        return safetyUser;
+    }
+
+    @Override
+    public Boolean sign(HttpServletRequest request) {
+        //获取当前用户
+        Long userid = getLoginUser(request).getId();
+        //获取日期
+        LocalDateTime now = LocalDateTime.now();
+        //拼接key
+        String keySuffiX = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        String key = "sign:" + userid + keySuffiX;
+        //获取今天是本月第几天
+        int day = now.getDayOfMonth();
+        //存入redis
+        stringRedisTemplate.opsForValue().setBit(key, day - 1, true);
+        return true;
+    }
+
+    @Override
+    public int signcount(HttpServletRequest request) {
+        //获取当前用户
+        Long userid = getLoginUser(request).getId();
+        //获取日期
+        LocalDateTime now = LocalDateTime.now();
+        //拼接key
+        String keySuffiX = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        String key = "sign:" + userid + keySuffiX;
+        //获取今天是本月第几天
+        int day = now.getDayOfMonth();
+        //获取本月前 day 天
+        List<Long> result = stringRedisTemplate.opsForValue().bitField(
+                key,
+                BitFieldSubCommands.create().
+                        get(BitFieldSubCommands.BitFieldType.unsigned(day)).valueAt(0));
+        //循环遍历，与运算，遇0则停
+        if (result == null || result.isEmpty()) {
+            return 0;
+        }
+        Long num = result.get(0);
+        if (num == 0) {
+            return 0;
+        }
+        int count = 0;
+        while(true) {
+            if ((num & 1) == 0) {
+                break;
+            } else {
+                count++;
+            }
+            num >>>= 1;
+        }
+        return count;
+    }
+
+    @Override
+    public Boolean signstate(HttpServletRequest request) {
+        //获取当前用户
+        Long userid = getLoginUser(request).getId();
+        //获取日期
+        LocalDateTime now = LocalDateTime.now();
+        //拼接key
+        String keySuffiX = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        String key = "sign:" + userid + keySuffiX;
+        //获取今天是本月第几天
+        int day = now.getDayOfMonth();
+        //获取当天的情况
+        List<Long> result = stringRedisTemplate.opsForValue().bitField(
+                key,
+                BitFieldSubCommands.create().
+                        get(BitFieldSubCommands.BitFieldType.unsigned(day)).valueAt(day - 1));
+        if (result == null || result.isEmpty()) {
+            return false;
+        }
+        Long num = result.get(0);
+        if (num == 0) {
+            return false;
+        }
+        return true;
     }
 }
