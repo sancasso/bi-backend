@@ -2,34 +2,55 @@ package com.canso.csbi.service.impl;
 
 import static com.canso.csbi.constant.UserConstant.USER_LOGIN_STATE;
 
+import cn.hutool.captcha.CaptchaUtil;
+import cn.hutool.captcha.LineCaptcha;
+import cn.hutool.captcha.generator.RandomGenerator;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.canso.csbi.common.ErrorCode;
+import com.canso.csbi.common.*;
 import com.canso.csbi.constant.CommonConstant;
+import com.canso.csbi.constant.CookieConstant;
 import com.canso.csbi.exception.BusinessException;
+import com.canso.csbi.manager.SmsLimiter;
 import com.canso.csbi.mapper.UserMapper;
+import com.canso.csbi.model.dto.sms.SmsDTO;
+import com.canso.csbi.model.dto.sms.UserLoginBySmsRequest;
 import com.canso.csbi.model.dto.user.UserQueryRequest;
 import com.canso.csbi.model.entity.User;
 import com.canso.csbi.model.enums.UserRoleEnum;
 import com.canso.csbi.model.vo.LoginUserVO;
 import com.canso.csbi.model.vo.UserVO;
 import com.canso.csbi.service.UserService;
+import com.canso.csbi.utils.CookieUtils;
 import com.canso.csbi.utils.SqlUtils;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import javax.annotation.Resource;
+import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import com.canso.csbi.utils.TokenUtils;
 import lombok.extern.slf4j.Slf4j;
 //import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
 
@@ -45,6 +66,22 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    private RedisTemplate<String,String> redisTemplate;
+
+    @Autowired
+    private RabbitUtils rabbitUtils;
+
+    @Autowired
+    private SmsLimiter smsLimiter;
+
+    @Autowired
+    @Lazy
+    private UserDetailsService userDetailsService;
+
+    @Autowired
+    private TokenUtils tokenUtils;
 
     /**
      * 盐值，混淆密码
@@ -370,5 +407,115 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return false;
         }
         return true;
+    }
+
+    @Override
+    public BaseResponse sendSmsCaptcha(String phoneNum) {
+        if (phoneNum == null ){
+            return ResultUtils.error(ErrorCode.PARAMS_ERROR);
+        }
+        AuthPhoneNumber authPhoneNumber = new AuthPhoneNumber();
+        //验证手机号的合法性
+        if(!authPhoneNumber.isPhoneNum(phoneNum.toString())){
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "手机号非法");
+        }
+        int code = (int)((Math.random() * 9 + 1) * 10000);
+        // 使用redis来存储手机号和验证码 ，同时使用令牌桶算法来实现流量控制
+        boolean sendSmsAuth = smsLimiter.sendSmsAuth(phoneNum, String.valueOf(code));
+        if(!sendSmsAuth){
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "发送频率过高，请稍后再试");
+        }
+        SmsDTO smsDTO = new SmsDTO(phoneNum, String.valueOf(code));
+        try {
+            //实际发送短信的功能交给第三方服务去实现
+            rabbitUtils.sendSms(smsDTO);
+        }catch (Exception e){
+            //发送失败，删除令牌桶
+            redisTemplate.delete("sms:" + phoneNum + "_last_refill_time");
+            redisTemplate.delete("sms:" + phoneNum + "_tokens");
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,"发送验证码失败，请稍后再试");
+        }
+        log.info("发送验证码成功---->手机号为{}，验证码为{}", phoneNum, code);
+        return ResultUtils.success("发送成功");
+    }
+
+    @Override
+    public void getCaptcha(HttpServletRequest request, HttpServletResponse response) {
+        // 随机生成 4 位验证码
+        RandomGenerator randomGenerator = new RandomGenerator("0123456789", 4);
+        // 定义图片的显示大小
+        LineCaptcha lineCaptcha = null;
+        lineCaptcha = CaptchaUtil.createLineCaptcha(100, 30);
+        response.setContentType("image/jpeg");
+        response.setHeader("Pragma", "No-cache");
+        // 在前端发送请求时携带captchaId，用于标识不同的用户。
+        String signature = request.getHeader("signature");
+        if (null == signature){
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        try {
+            // 调用父类的 setGenerator() 方法，设置验证码的类型
+            lineCaptcha.setGenerator(randomGenerator);
+            // 输出到页面
+            lineCaptcha.write(response.getOutputStream());
+            // 打印日志
+            log.info("captchaId：{} ----生成的验证码:{}", signature,lineCaptcha.getCode());
+            // 关闭流
+            response.getOutputStream().close();
+            //将对应的验证码存入redis中去，2分钟后过期
+            redisTemplate.opsForValue().set("api:captchaId:"+signature,lineCaptcha.getCode(),4, TimeUnit.MINUTES);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public BaseResponse loginBySms(UserLoginBySmsRequest loginBySms, HttpServletResponse response) {
+        String phoneNum = loginBySms.getPhoneNum();
+        String code = loginBySms.getCode();
+        if ( null == phoneNum || null == code){
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        //验证手机号的合法性
+        AuthPhoneNumber authPhoneNumber = new AuthPhoneNumber();
+        if(!authPhoneNumber.isPhoneNum(phoneNum.toString())){
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "手机号非法");
+        }
+        //验证用户输入的手机号和验证码是否匹配
+        boolean verify = smsLimiter.verifyCode(phoneNum, code);
+        if (!verify){
+            throw new BusinessException(ErrorCode.SMS_CODE_ERROR);
+        }
+        //验证该手机号是否完成注册
+        UserDetails userDetails = userDetailsService.loadUserByUsername(phoneNum);
+        User user=  (User)userDetails;
+        user.setUserPassword(null);
+        LoginUserVO loginUserVo = initUserLogin((UserDetails) user,response);
+        return ResultUtils.success(loginUserVo);
+    }
+    /**
+     * 初始化用户登录状态
+     * @param user
+     */
+    private LoginUserVO initUserLogin(UserDetails user,HttpServletResponse response){
+        //设置到Security 全局对象中去
+        UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+        LoginUserVO loginUserVo = new LoginUserVO();
+        BeanUtils.copyProperties(user,loginUserVo);
+        //生成token并存入redis
+        String token = tokenUtils.generateToken(String.valueOf(loginUserVo.getId()),loginUserVo.getUserAccount());
+        loginUserVo.setToken(token);
+        Cookie cookie = new Cookie(CookieConstant.headAuthorization,token);
+        cookie.setPath("/");
+        cookie.setMaxAge(CookieConstant.expireTime);
+        response.addCookie(cookie);
+        CookieUtils cookieUtils = new CookieUtils();
+        String autoLoginContent = cookieUtils.generateAutoLoginContent(loginUserVo.getId().toString(), loginUserVo.getUserAccount());
+        Cookie cookie1 = new Cookie(CookieConstant.autoLoginAuthCheck, autoLoginContent);
+        cookie1.setPath("/");
+        cookie.setMaxAge(CookieConstant.expireTime);
+        response.addCookie(cookie1);
+        return loginUserVo;
     }
 }

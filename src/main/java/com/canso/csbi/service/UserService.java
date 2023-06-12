@@ -1,6 +1,8 @@
 package com.canso.csbi.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.canso.csbi.common.BaseResponse;
+import com.canso.csbi.model.dto.sms.UserLoginBySmsRequest;
 import com.canso.csbi.model.dto.user.UserQueryRequest;
 import com.canso.csbi.model.entity.User;
 import com.baomidou.mybatisplus.extension.service.IService;
@@ -9,6 +11,7 @@ import com.canso.csbi.model.vo.UserVO;
 //import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.util.List;
 
 /**
@@ -144,4 +147,25 @@ public interface UserService extends IService<User> {
      *
      */
     Boolean signstate(HttpServletRequest request);
+
+    /**
+     * 发送短信验证码
+     * @param phoneNum
+     */
+    BaseResponse sendSmsCaptcha(String phoneNum);
+
+    /**
+     * 生成图形验证码
+     * @param request
+     * @param response
+     */
+    void getCaptcha(HttpServletRequest request, HttpServletResponse response);
+
+    /**
+     * 用户通过手机号进行登录
+     * @param loginBySms
+     * @param response
+     * @return
+     */
+    BaseResponse loginBySms(UserLoginBySmsRequest loginBySms, HttpServletResponse response);
 }

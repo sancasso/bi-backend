@@ -34,6 +34,16 @@ public class UserVO implements Serializable {
     private String userRole;
 
     /**
+     * 性别
+     */
+    private Integer gender;
+
+    /**
+     * 手机号
+     */
+    private String phone;
+
+    /**
      * 创建时间
      */
     private Date createTime;

@@ -11,6 +11,7 @@ import com.canso.csbi.common.ResultUtils;
 import com.canso.csbi.constant.UserConstant;
 import com.canso.csbi.exception.BusinessException;
 import com.canso.csbi.exception.ThrowUtils;
+import com.canso.csbi.model.dto.sms.UserLoginBySmsRequest;
 import com.canso.csbi.model.dto.user.UserAddRequest;
 import com.canso.csbi.model.dto.user.UserLoginRequest;
 import com.canso.csbi.model.dto.user.UserQueryRequest;
@@ -60,6 +61,33 @@ public class UserController {
 //    @Resource
 //    private WxOpenConfig wxOpenConfig;
 
+    /**
+     * 发送短信验证码
+     */
+    @GetMapping("/smsCaptcha")
+    public BaseResponse smsCaptcha(@RequestParam String phoneNum){
+        return userService.sendSmsCaptcha(phoneNum);
+    }
+    /**
+     * 生成图形验证码
+     * @param request
+     * @param response
+     */
+    @GetMapping("/getCaptcha")
+    public void getCaptcha(HttpServletRequest request, HttpServletResponse response){
+        userService.getCaptcha(request,response);
+    }
+
+    /**
+     * 用户通过手机号进行登录
+     * @param loginBySms
+     * @param response
+     * @return
+     */
+    @PostMapping("/loginBySms")
+    public BaseResponse loginBySms(@RequestBody UserLoginBySmsRequest loginBySms , HttpServletResponse response){
+        return userService.loginBySms(loginBySms,response);
+    }
     // region 登录相关
 
     /**

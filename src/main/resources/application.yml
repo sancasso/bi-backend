@@ -1,6 +1,4 @@
-# 公共配置文件
-# @author <a href="https://github.com/liyupi">程序员鱼皮</a>
-# @from <a href="https://yupi.icu">编程导航知识星球</a>
+
 spring:
   application:
     name: csbi-backend
@@ -44,7 +42,8 @@ spring:
       max-file-size: 10MB
   # 消息队列
   rabbitmq:
-    host: localhost
+#    host: localhost
+    host: 134.175.88.241
     port: 5672
     username: guest
     password: guest
@@ -100,3 +99,9 @@ yuapi:
   client:
     access-key: 8i7zegqu3927cu8tyezz2lrsepsxiubo
     secret-key: b5ga7986v90i01fxt3eo9lhmetr6z5xu
+tencent:
+  secretId: #你的secretId
+  secretKey: #你的secretKey
+  sdkAppId: #你的sdkAppId
+  signName: #你的signName
+  templateId: #你的templateId
